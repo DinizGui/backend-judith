@@ -1,0 +1,294 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tipos de empresa do onboarding (Seção 6 do JUDITH-onboarding-v1)
+enum TipoEmpresa {
+  MEI
+  ME
+  EPP
+  AUTONOMO
+}
+
+enum Plano {
+  TRIAL
+  ESSENCIAL
+  INTERMEDIARIO
+  PROFISSIONAL
+  COMPLETO
+  EMPRESARIAL
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+// Roteamento de modelos (Seção 4.1 do briefing v6)
+enum ModelTier {
+  HAIKU
+  SONNET
+}
+
+// Estágio do onboarding (Seção 8 do JUDITH-onboarding-v1).
+// AGUARDANDO_TERMOS → AGUARDANDO_PERFIL → CONCLUIDO.
+enum OnboardingEstado {
+  AGUARDANDO_TERMOS
+  AGUARDANDO_PERFIL
+  CONCLUIDO
+  RECUSADO
+}
+
+// Perfil enxuto do usuário (~280-300 tokens injetados por sessão).
+// Justificativa: ver Seção 4.4 do briefing v6 (memória persistente = perfil enxuto).
+model User {
+  id              String           @id @default(cuid())
+  // Número internacional sem +, formato Evolution (ex: 5511999999999)
+  whatsappNumber  String           @unique
+  nome            String?
+  tipoEmpresa     TipoEmpresa?
+  ramo            String?
+  cidade          String?
+  plano           Plano            @default(TRIAL)
+  aceitouTermos   Boolean          @default(false)
+  aceitouTermosAt DateTime?
+  trialFimEm      DateTime?
+  onboarding      OnboardingEstado @default(AGUARDANDO_TERMOS)
+  // Mensagem original do Cenário B (usuário já mandou dúvida no primeiro contato).
+  // Guardada até o perfil ser coletado, daí respondemos a dúvida original.
+  duvidaPendente  String?          @db.Text
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  sessions      Session[]
+  reminders     Reminder[]
+  usage         UsageEvent[]
+  subscriptions Subscription[]
+
+  @@index([whatsappNumber])
+}
+
+// Sessão = janela de conversa ativa. Histórico cheio até 8 turnos,
+// resumido a partir do 9º (Seção 4.5 do briefing v6).
+model Session {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startedAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  summary     String?
+  closed      Boolean   @default(false)
+  messages    Message[]
+
+  @@index([userId, lastSeenAt])
+}
+
+model Message {
+  id         String      @id @default(cuid())
+  sessionId  String
+  session    Session     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role       MessageRole
+  content    String      @db.Text
+  model      ModelTier?
+  // Tokens para auditoria de custo (Seção 8.2 do briefing v6)
+  inputTokens     Int?
+  outputTokens    Int?
+  cacheReadTokens Int?
+  cacheWriteTokens Int?
+  createdAt  DateTime    @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// Cache semântico (Seção 4.3 do briefing v6): TTL 24h, hash da pergunta.
+model SemanticCache {
+  id         String   @id @default(cuid())
+  hash       String   @unique
+  question   String   @db.Text
+  answer     String   @db.Text
+  hits       Int      @default(0)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([hash])
+  @@index([expiresAt])
+}
+
+// 3 fluxos de lembrete (Seção 3.4 do briefing v6).
+model Reminder {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  titulo      String
+  descricao   String?  @db.Text
+  dataAlvo    DateTime
+  // D-3, D-1, dia: marca cada disparo realizado
+  enviadoD3   Boolean  @default(false)
+  enviadoD1   Boolean  @default(false)
+  enviadoDia  Boolean  @default(false)
+  cancelado   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, dataAlvo])
+  @@index([dataAlvo, cancelado])
+}
+
+// Status da assinatura (fluxo-assinatura-whatsapp-v1).
+enum SubscriptionStatus {
+  TRIALING       // trial ativo, sem pagamento
+  PENDING        // aguardando primeiro pagamento
+  ACTIVE         // pago e em dia
+  PAST_DUE       // falha de cobrança em curso (dunning D+1 a D+3)
+  CANCELED       // cancelada — acesso ativo até subscription.currentPeriodEnd
+  SUSPENDED      // dunning estourou ou trial expirou sem upgrade
+}
+
+// Método de pagamento escolhido pelo usuário no fluxo de assinatura.
+enum PaymentMethod {
+  PIX
+  CARD
+}
+
+// Status do pagamento individual (Mercado Pago: pending, approved, rejected, refunded, in_process).
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
+  CANCELED
+  IN_PROCESS
+}
+
+// Catálogo dos planos (v6 §7.2). Permite mudar preço/limite sem alterar enum.
+model PlanCatalog {
+  id              String   @id @default(cuid())
+  codigo          Plano    @unique
+  nome            String
+  precoCentavos   Int
+  duvidasMes      Int?     // null = ilimitado
+  analisesMes     Int?
+  redacoesMes     Int?
+  lembretesMes    Int?
+  ativo           Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Assinatura efetiva do usuário. Um usuário tem sempre 1 ativa.
+model Subscription {
+  id                String             @id @default(cuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plano             Plano
+  status            SubscriptionStatus @default(TRIALING)
+  paymentMethod     PaymentMethod?
+
+  trialEndsAt       DateTime?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  canceledAt        DateTime?
+  suspendedAt       DateTime?
+
+  // Referência externa Mercado Pago (subscription/preapproval/customer)
+  mpCustomerId      String?
+  mpSubscriptionId  String?
+  mpCardToken       String?
+
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  payments          Payment[]
+
+  @@index([userId, status])
+  @@index([currentPeriodEnd])
+  @@index([trialEndsAt])
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  subscriptionId  String
+  subscription    Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  metodo          PaymentMethod
+  valorCentavos   Int
+  status          PaymentStatus @default(PENDING)
+  // Referência externa Mercado Pago (payment.id ou preference.id)
+  mpPaymentId     String?       @unique
+  mpPreferenceId  String?
+  pixQrCode       String?       @db.Text
+  pixQrCodeImage  String?       @db.Text
+  pixCopyPaste    String?       @db.Text
+  cardCheckoutUrl String?       @db.Text
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([subscriptionId, createdAt])
+  @@index([status, createdAt])
+}
+
+// Alerta interno pro founder — reconciliação webhook, dunning, etc.
+enum AdminAlertKind {
+  RECONCILIATION   // pago no gateway mas sem ativação
+  PAYMENT_FAILURE  // dunning em curso
+  TRIAL_EXPIRING   // trial acaba em 24h
+  WEBHOOK_FAILURE  // webhook caiu
+}
+
+enum AdminAlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model AdminAlert {
+  id          String            @id @default(cuid())
+  kind        AdminAlertKind
+  status      AdminAlertStatus  @default(OPEN)
+  titulo      String
+  detalhe     String?           @db.Text
+  userId      String?
+  paymentId   String?
+  createdAt   DateTime          @default(now())
+  resolvedAt  DateTime?
+
+  @@index([status, createdAt])
+  @@index([userId])
+}
+
+// Banco de dicas proativas do onboarding (Seção 8 do JUDITH-onboarding-v1).
+// "usadoPor" registra quem já viu, para não repetir no mesmo usuário.
+model TipDicaOnboarding {
+  id        String      @id @default(cuid())
+  perfil    TipoEmpresa
+  texto     String      @db.Text
+  ativo     Boolean     @default(true)
+  usadoPor  String[]    @default([])
+  createdAt DateTime    @default(now())
+
+  @@index([perfil, ativo])
+}
+
+// Auditoria de uso por plano (limites da Seção 7.2 do briefing v6).
+enum UsageKind {
+  DUVIDA
+  ANALISE
+  REDACAO
+  LEMBRETE
+}
+
+model UsageEvent {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      UsageKind
+  custoBrl  Float?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, kind, createdAt])
+}

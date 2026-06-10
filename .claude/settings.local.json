@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "PowerShell(python -m pip install python-docx --quiet 2>&1 | Select-Object -Last 5)",
+      "Bash(git init *)",
+      "Bash(mkdir -p src/config src/evolution src/judith/prompts src/db src/rag prisma)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(npm view *)",
+      "Bash(npm run *)",
+      "Bash(docker compose *)",
+      "Bash(npx prisma *)",
+      "Bash(curl -s http://localhost:3000/health)",
+      "Bash(curl *)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(node *)",
+      "Bash(docker exec *)",
+      "Bash(python -c \"import sys, json; data = json.load\\(sys.stdin\\); [print\\(t['name']\\) for t in data.get\\('results', []\\)]\")",
+      "Bash(python -c \"import sys,json,base64; d=json.load\\(sys.stdin\\); qr=d.get\\('qrcode',{}\\); code=qr.get\\('base64',''\\); print\\('PAIRING_CODE:', qr.get\\('pairingCode'\\)\\); print\\('LEN_BASE64:', len\\(code\\)\\); open\\(r'C:\\\\\\\\Users\\\\\\\\guilh\\\\\\\\judith\\\\\\\\qr.png','wb'\\).write\\(base64.b64decode\\(code.split\\(','\\)[-1]\\)\\) if code else print\\('NO_QR_YET'\\)\")",
+      "WebFetch(domain:web.whatsapp.com)",
+      "Bash(start \"\" \"C:\\\\Users\\\\guilh\\\\judith\\\\qr.png\")",
+      "Bash(powershell -c \"Start-Process 'C:\\\\Users\\\\guilh\\\\judith\\\\qr.png'\")",
+      "Bash(ngrok version *)",
+      "Bash(npx next *)",
+      "Bash(netstat -ano)",
+      "Bash(npx pm2 *)",
+      "Bash(git -C /c/Users/guilh/judith remote -v)",
+      "Bash(git -C /c/Users/guilh/judith/web remote -v)",
+      "Bash(git -C /c/Users/guilh/judith/admin remote -v)",
+      "Bash(gh auth *)",
+      "Bash(git branch *)",
+      "Bash(git remote *)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(grep -q '^admin/$' .gitignore)",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

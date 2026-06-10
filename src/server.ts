@@ -1,0 +1,108 @@
+import Fastify from "fastify";
+import sensible from "@fastify/sensible";
+import { env } from "./config/env.js";
+import { parseInbound, EvolutionWebhookBody } from "./evolution/types.js";
+import { sendText, sendTyping } from "./evolution/client.js";
+import { downloadMediaBase64 } from "./evolution/media.js";
+import { handleInbound } from "./judith/conversation.js";
+import { transcreverAudio } from "./judith/whisper.js";
+import { registerLegalRoutes } from "./routes/legal.js";
+
+const app = Fastify({
+  logger: {
+    level: env.LOG_LEVEL,
+    transport:
+      env.NODE_ENV === "development"
+        ? { target: "pino-pretty", options: { translateTime: "HH:MM:ss" } }
+        : undefined,
+  },
+  bodyLimit: 10 * 1024 * 1024,
+});
+
+app.register(sensible);
+registerLegalRoutes(app);
+
+app.get("/health", async () => ({ status: "ok", versao: "v03062026" }));
+
+// Webhook do Evolution API. Configure no Evolution para apontar para:
+//   {PUBLIC_URL}/webhook/evolution
+// com o evento "messages.upsert" habilitado.
+app.post("/webhook/evolution", async (req, reply) => {
+  const body = req.body as EvolutionWebhookBody;
+  const parsed = parseInbound(body);
+
+  // 200 imediato para o Evolution não reenviar — processa em background.
+  reply.code(200).send({ received: true });
+
+  if (!parsed) return;
+
+  // Áudio: baixa do Evolution e transcreve com Whisper.
+  let textoParaPipeline = parsed.text;
+  let isAudio = false;
+  if (parsed.hasAttachment && parsed.attachmentKind === "audio") {
+    isAudio = true;
+    const media = await downloadMediaBase64({
+      remoteJid: parsed.fromJid,
+      fromMe: false,
+      id: parsed.messageId,
+    });
+    if (!media) {
+      await sendText(
+        parsed.whatsappNumber,
+        "Recebi seu áudio mas não consegui baixar aqui — pode mandar de novo? 🙏"
+      );
+      return;
+    }
+    const transcricao = await transcreverAudio(media.base64, media.mimetype);
+    if (!transcricao) {
+      await sendText(
+        parsed.whatsappNumber,
+        "Recebi seu áudio mas não consegui entender — pode repetir falando mais devagar ou mandar como texto? 😊"
+      );
+      return;
+    }
+    app.log.info({ user: parsed.whatsappNumber, audio: transcricao }, "judith.audio");
+    textoParaPipeline = transcricao;
+  }
+
+  try {
+    await sendTyping(parsed.whatsappNumber, 1_500);
+    const result = await handleInbound({
+      whatsappNumber: parsed.whatsappNumber,
+      pushName: parsed.pushName,
+      text: textoParaPipeline,
+      hasAttachment: parsed.hasAttachment && !isAudio,
+    });
+    app.log.info(
+      {
+        user: parsed.whatsappNumber,
+        model: result.modelUsed,
+        sessionId: result.sessionId,
+        n: result.replies.length,
+      },
+      "judith.reply"
+    );
+    // WhatsApp-first (v6 §4.7): mensagens sequenciais curtas, não um bloco único.
+    for (let i = 0; i < result.replies.length; i++) {
+      if (i > 0) await sendTyping(parsed.whatsappNumber, 800);
+      await sendText(parsed.whatsappNumber, result.replies[i]!);
+    }
+  } catch (err) {
+    app.log.error({ err }, "judith.fail");
+    await sendText(
+      parsed.whatsappNumber,
+      "Opa, deu uma travadinha aqui do meu lado. Pode mandar de novo? 🙏"
+    );
+  }
+});
+
+const start = async () => {
+  try {
+    await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+};
+
+void start();
