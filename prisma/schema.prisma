@@ -260,6 +260,146 @@ model AdminAlert {
   @@index([userId])
 }
 
+// ============================================================
+// MULTI-TENANT — Plataforma SaaS de bots WhatsApp
+// Cada Cliente paga pra ter 1+ Bots conectados a instâncias Evolution.
+// ============================================================
+
+model Cliente {
+  id              String         @id @default(cuid())
+  email           String         @unique
+  senhaHash       String
+  nomeNegocio     String
+  nomeContato     String?
+  whatsappContato String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  bots            Bot[]
+  assinatura      AssinaturaCliente?
+
+  @@index([email])
+}
+
+enum BotStatus {
+  CRIADO        // criado mas nunca pareou WhatsApp
+  PAREANDO      // QR gerado, aguardando scan
+  ATIVO         // pareado e operando
+  DESCONECTADO  // perdeu conexão WhatsApp
+  PAUSADO       // cliente desativou
+}
+
+model Bot {
+  id            String     @id @default(cuid())
+  clienteId     String
+  cliente       Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  nome          String
+  // Nome único da instância no Evolution (ex: "bot-cuid123")
+  instanceName  String     @unique
+  status        BotStatus  @default(CRIADO)
+  whatsappNumero String?   // preenchido após pareamento
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  config        BotConfig?
+  leads         Lead[]
+  conversas     Conversa[]
+
+  @@index([clienteId])
+  @@index([instanceName])
+}
+
+// Persona, tom, instruções e FAQ do bot — configurado pelo cliente.
+model BotConfig {
+  id           String   @id @default(cuid())
+  botId        String   @unique
+  bot          Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  persona      String   @db.Text  // "Sou o bot da Loja X, vendo bolos..."
+  tom          String   @default("amigável e direto")
+  instrucoes   String?  @db.Text  // regras extra do cliente
+  faqJson      String?  @db.Text  // FAQ em JSON
+  modelo       ModelTier @default(HAIKU)
+  updatedAt    DateTime @updatedAt
+}
+
+// Quem manda mensagem pro bot (cliente do cliente — número WhatsApp).
+model Lead {
+  id            String    @id @default(cuid())
+  botId         String
+  bot           Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  whatsappNumero String
+  pushName      String?
+  createdAt     DateTime  @default(now())
+
+  conversas     Conversa[]
+
+  @@unique([botId, whatsappNumero])
+  @@index([botId])
+}
+
+model Conversa {
+  id          String    @id @default(cuid())
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  leadId      String
+  lead        Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  startedAt   DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  fechada     Boolean   @default(false)
+
+  mensagens   MensagemBot[]
+
+  @@index([botId, lastSeenAt])
+  @@index([leadId])
+}
+
+enum MensagemDirecao {
+  IN   // lead → bot
+  OUT  // bot → lead
+}
+
+model MensagemBot {
+  id           String          @id @default(cuid())
+  conversaId   String
+  conversa     Conversa        @relation(fields: [conversaId], references: [id], onDelete: Cascade)
+  direcao      MensagemDirecao
+  conteudo     String          @db.Text
+  modelo       ModelTier?
+  inputTokens  Int?
+  outputTokens Int?
+  cacheReadTokens Int?
+  createdAt    DateTime        @default(now())
+
+  @@index([conversaId, createdAt])
+}
+
+enum AssinaturaPlano {
+  TRIAL
+  STARTER     // R$ 49,90 — 1 bot, até 500 msg/mês
+  PRO         // R$ 99,90 — 3 bots, até 2.000 msg/mês
+  BUSINESS    // R$ 199,90 — 10 bots, até 10.000 msg/mês
+}
+
+enum AssinaturaStatus {
+  TRIAL_ATIVO
+  ATIVA
+  EM_ATRASO
+  CANCELADA
+}
+
+model AssinaturaCliente {
+  id           String           @id @default(cuid())
+  clienteId    String           @unique
+  cliente      Cliente          @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  plano        AssinaturaPlano  @default(TRIAL)
+  status       AssinaturaStatus @default(TRIAL_ATIVO)
+  trialAcabaEm DateTime?
+  ativaAte     DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+}
+
+// ============================================================
 // Banco de dicas proativas do onboarding (Seção 8 do JUDITH-onboarding-v1).
 // "usadoPor" registra quem já viu, para não repetir no mesmo usuário.
 model TipDicaOnboarding {

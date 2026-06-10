@@ -7,6 +7,7 @@ import { downloadMediaBase64 } from "./evolution/media.js";
 import { handleInbound } from "./judith/conversation.js";
 import { transcreverAudio } from "./judith/whisper.js";
 import { registerLegalRoutes } from "./routes/legal.js";
+import { processarMensagemBot } from "./bot/handler.js";
 
 const app = Fastify({
   logger: {
@@ -65,34 +66,50 @@ app.post("/webhook/evolution", async (req, reply) => {
     textoParaPipeline = transcricao;
   }
 
+  const instanceName = body.instance;
+  const isJudithLegacy = instanceName === env.EVOLUTION_INSTANCE;
+
   try {
-    await sendTyping(parsed.whatsappNumber, 1_500);
-    const result = await handleInbound({
-      whatsappNumber: parsed.whatsappNumber,
-      pushName: parsed.pushName,
-      text: textoParaPipeline,
-      hasAttachment: parsed.hasAttachment && !isAudio,
-    });
-    app.log.info(
-      {
-        user: parsed.whatsappNumber,
-        model: result.modelUsed,
-        sessionId: result.sessionId,
-        n: result.replies.length,
-      },
-      "judith.reply"
-    );
-    // WhatsApp-first (v6 §4.7): mensagens sequenciais curtas, não um bloco único.
-    for (let i = 0; i < result.replies.length; i++) {
-      if (i > 0) await sendTyping(parsed.whatsappNumber, 800);
-      await sendText(parsed.whatsappNumber, result.replies[i]!);
+    if (isJudithLegacy) {
+      // Fluxo original da JUDITH jurídica (single-tenant)
+      await sendTyping(parsed.whatsappNumber, 1_500);
+      const result = await handleInbound({
+        whatsappNumber: parsed.whatsappNumber,
+        pushName: parsed.pushName,
+        text: textoParaPipeline,
+        hasAttachment: parsed.hasAttachment && !isAudio,
+      });
+      app.log.info(
+        {
+          user: parsed.whatsappNumber,
+          model: result.modelUsed,
+          sessionId: result.sessionId,
+          n: result.replies.length,
+        },
+        "judith.reply"
+      );
+      for (let i = 0; i < result.replies.length; i++) {
+        if (i > 0) await sendTyping(parsed.whatsappNumber, 800);
+        await sendText(parsed.whatsappNumber, result.replies[i]!);
+      }
+    } else {
+      // Bot multi-tenant: roteia pela instância → busca Bot → responde com persona do cliente
+      const r = await processarMensagemBot({
+        instanceName,
+        fromNumero: parsed.whatsappNumber,
+        fromPushName: parsed.pushName,
+        texto: textoParaPipeline,
+      });
+      app.log.info({ instance: instanceName, result: r }, "bot.reply");
     }
   } catch (err) {
-    app.log.error({ err }, "judith.fail");
-    await sendText(
-      parsed.whatsappNumber,
-      "Opa, deu uma travadinha aqui do meu lado. Pode mandar de novo? 🙏"
-    );
+    app.log.error({ err, instance: instanceName }, "webhook.fail");
+    if (isJudithLegacy) {
+      await sendText(
+        parsed.whatsappNumber,
+        "Opa, deu uma travadinha aqui do meu lado. Pode mandar de novo? 🙏"
+      );
+    }
   }
 });
 
