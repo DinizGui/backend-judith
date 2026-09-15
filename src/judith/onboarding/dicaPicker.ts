@@ -24,17 +24,16 @@ export async function pegarDicaParaUsuario(
 ): Promise<string> {
   await seedDicasSeNecessario();
 
-  const disponiveis = await prisma.tipDicaOnboarding.findMany({
-    where: { perfil, ativo: true, NOT: { usadoPor: { has: userId } } },
+  // usadoPor é Json (lista de userIds) — MySQL não tem String[], então filtra em memória
+  const todas = await prisma.tipDicaOnboarding.findMany({
+    where: { perfil, ativo: true },
   });
+  const usadoPorDe = (d: { usadoPor: unknown }): string[] =>
+    Array.isArray(d.usadoPor) ? (d.usadoPor as string[]) : [];
+  const disponiveis = todas.filter((d) => !usadoPorDe(d).includes(userId));
 
   // Esgotou — recomeça resetando histórico desse usuário no perfil
-  const pool =
-    disponiveis.length > 0
-      ? disponiveis
-      : await prisma.tipDicaOnboarding.findMany({
-          where: { perfil, ativo: true },
-        });
+  const pool = disponiveis.length > 0 ? disponiveis : todas;
 
   if (pool.length === 0) {
     return "Aproveita pra explorar — é só me chamar sempre que precisar.";
@@ -44,7 +43,7 @@ export async function pegarDicaParaUsuario(
 
   await prisma.tipDicaOnboarding.update({
     where: { id: escolhida.id },
-    data: { usadoPor: { push: userId } },
+    data: { usadoPor: [...usadoPorDe(escolhida), userId] },
   });
 
   return escolhida.texto;

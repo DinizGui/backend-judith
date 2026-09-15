@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -407,7 +407,7 @@ model TipDicaOnboarding {
   perfil    TipoEmpresa
   texto     String      @db.Text
   ativo     Boolean     @default(true)
-  usadoPor  String[]    @default([])
+  usadoPor  Json        @default("[]")   // lista de userIds (MySQL nao suporta String[])
   createdAt DateTime    @default(now())
 
   @@index([perfil, ativo])
