@@ -71,6 +71,7 @@ export async function handleInbound(input: HandleInput): Promise<HandleOutput> {
 
   const result = await askJudith({
     tier: route.tier,
+    funcao: route.funcao,
     user,
     history,
     userMessage: resultado.mensagemParaIA,

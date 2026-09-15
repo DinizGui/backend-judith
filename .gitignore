@@ -9,3 +9,6 @@ evolution_instances
 postgres_data
 web/
 admin/
+
+# Prompts do fundador (confidenciais) - vao pra VPS por scp, nunca pro repo publico
+prompts/JUDITH-*.md

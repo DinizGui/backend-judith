@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ModelTier, User } from "@prisma/client";
 import { env } from "../config/env.js";
-import { PROMPT_PRINCIPAL } from "./prompts/principal.js";
+import { PROMPT_ANALISE, PROMPT_PRINCIPAL, PROMPT_REDACAO } from "./prompts/principal.js";
 
 const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
@@ -10,8 +10,12 @@ export type ChatTurn = {
   content: string;
 };
 
+// As 4 funções da spec (§1); lembretes/coleta ainda passam como dúvida.
+export type Funcao = "duvida" | "redacao" | "analise";
+
 export type AskInput = {
   tier: ModelTier;
+  funcao: Funcao;
   user: User | null;
   history: ChatTurn[];
   userMessage: string;
@@ -46,20 +50,23 @@ function userProfileBlock(user: User | null): string {
 export async function askJudith(input: AskInput): Promise<AskOutput> {
   const model = modelIdFor(input.tier);
 
-  // System em 2 blocos: o primeiro é cacheado (3k tokens estáveis = hit rate alto);
-  // o segundo é o perfil enxuto, que muda por usuário e fica fora do cache.
-  // Referência: Seção 4.2 do briefing v6.
+  // System em blocos, na ordem estático → dinâmico (spec §1/§7):
+  //   1. Seção A (sempre, cacheada)
+  //   2. Seção B (redação) ou C (análise), sob demanda, também cacheada
+  //   3. Perfil enxuto do usuário — muda por usuário, fica fora do cache
   const system: Anthropic.TextBlockParam[] = [
     {
       type: "text",
       text: PROMPT_PRINCIPAL,
       cache_control: { type: "ephemeral" },
     },
-    {
-      type: "text",
-      text: userProfileBlock(input.user),
-    },
   ];
+  if (input.funcao === "redacao") {
+    system.push({ type: "text", text: PROMPT_REDACAO, cache_control: { type: "ephemeral" } });
+  } else if (input.funcao === "analise") {
+    system.push({ type: "text", text: PROMPT_ANALISE, cache_control: { type: "ephemeral" } });
+  }
+  system.push({ type: "text", text: userProfileBlock(input.user) });
 
   const messages: Anthropic.MessageParam[] = [
     ...input.history.map((t) => ({ role: t.role, content: t.content })),
@@ -68,7 +75,8 @@ export async function askJudith(input: AskInput): Promise<AskOutput> {
 
   const response = await client.messages.create({
     model,
-    max_tokens: 1024,
+    // Documento redigido ou análise cláusula a cláusula não cabe em 1k tokens.
+    max_tokens: input.funcao === "duvida" ? 1024 : 4096,
     system,
     messages,
   });
